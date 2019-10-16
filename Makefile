@@ -1,6 +1,6 @@
 CC := gcc
 CFLAGS := -std=c11 -O3 -Wall -pthread -flto -march=native -ffast-math
-LIBS := -lpthread -lgomp
+LIBS := -lpthread -lgomp -lm
 
 OBJS := heat_diffusion.o 
 
@@ -17,4 +17,4 @@ test:
 	tar -czvf heat_diffusion.tar.gz heat_diffusion.c heat_diffusion.h Makefile
 	./check_submission.py heat_diffusion.tar.gz
 clean:
-	rm -rvf *.o heat_diffusion extracted/ heat_diffusion.tar.gz
+	rm -rvf *.o heat_diffusion extracted/ heat_diffusion.tar.gz vgcore*

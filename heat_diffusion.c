@@ -3,7 +3,7 @@
 int main(int argc, char* argv[])
 {
   int niter=0;
-  double c;
+  double c=0.;
   char* ptr1 = NULL;
   char* ptr2 = NULL;
   if (argc == 3 ) {
@@ -11,11 +11,11 @@ int main(int argc, char* argv[])
       ptr1 = strchr(argv[ix], 'n' );
       ptr2 = strchr(argv[ix], 'd' );
       if ( ptr1 ){
-	niter = strtol(++ptr1, NULL, 10);
+  	niter = strtol(++ptr1, NULL, 10);
       } else if ( ptr2 ) {
-	c = atof(++ptr2);
+  	c = atof(++ptr2);
       }
-    } 
+    }
   } else {
     printf("Invalid number of arguments. Correct syntax is: heat_diffusion -n#numberOfTimeSteps4 -d#diffusionConstant\n");
     exit(0);
@@ -25,7 +25,7 @@ int main(int argc, char* argv[])
   char line[80];
   FILE *input = fopen("diffusion", "r");
   int i=0, j=0;
-  double t=0;
+  double t=0.;
   if ( input == NULL ) {
     perror("Error opening file");
     exit(0);
@@ -34,23 +34,86 @@ int main(int argc, char* argv[])
   fgets( line, sizeof(line), input);
   sscanf(line, "%d %d", &nx, &ny);
   //store initial values (note: row major order)
-  double* iventries = (double*) calloc(ny * nx, sizeof(double));
-  double** iv = (double**) malloc(sizeof(double*) * nx); //perhaps not needed if we decide to compute the index manually...
-  for (size_t ix = 0, jx = 0; ix < nx; ++ix, jx += ny) {
-    iv[ix] = iventries + jx;
+  double* ivEntries = (double*) malloc( sizeof(double)*nx*ny);
+  for (size_t ix = 0; ix < nx*ny; ++ix) {
+    ivEntries[ix] = 0;
   }
   //read the rest
   while ( fgets(line, sizeof(line), input) != NULL) {
     sscanf(line, "%d %d %lf", &i, &j, &t);
-    iventries[i*nx + j] = t;
+    ivEntries[i*ny + j] = t;
   }
   fclose(input);
 
   /* for (size_t ix = 0; ix < nx; ++ix) { */
   /*   for (size_t jx = 0; jx < ny; ++jx) { */
-  /*     printf("%lf \n", iv[ix][jx]); */
+  /*     printf("i= %d, j= %d, t=%lf \n", ix, jx, iv[ix][jx]); */
   /*   } */
   /* } */
+
+  double* nextTimeEntries = (double*) malloc(sizeof(double)*nx*ny);
+
+  //compute the temperatures in next time step
+  for ( int n = 0; n < niter; ++n) {
+    //    printf("-------------\n");
+    //    printf("TIME STEP %d \n", n+1);
+    for ( int ix = 0; ix < nx; ++ix){
+      for ( int jx = 0; jx < ny; ++jx) {
+  	double hij, hijW, hijE, hijS, hijN;
+  	hij = ivEntries[ix*ny + jx];
+  	hijW = ( jx-1 >= 0 ? ivEntries[ix*ny + jx-1] : 0. );
+  	hijE = ( jx+1 < ny ? ivEntries[ix*ny + jx+1] : 0.);
+  	hijS = ( ix+1 < nx ? ivEntries[(ix+1)*ny + jx] : 0.);
+  	hijN = ( ix-1 >= 0 ? ivEntries[(ix-1)*ny + jx] : 0.);
+
+  	nextTimeEntries[ix*ny + jx] = computeNextTemp(&hij, &hijW, &hijE, &hijS, &hijN, &c);
+      
+  	//	printf("%lf \n", nt[ix][jx]);
+      }
+    }
+    memcpy(ivEntries, nextTimeEntries, nx*ny*sizeof(double));
+  }
+
+  //compute average temperature
+  double avg = computeAverage(nextTimeEntries, nx, ny);
+
+  double* avgDiffEntries = (double*) malloc(sizeof(double)*nx*ny);
+  for (int ix = 0; ix < nx*ny; ++ix) {
+    avgDiffEntries[ix] = 0.;
+  }
+
+  /* //compute differences (in nextTimeEntries since the contents are copied to ivEntries) */
+  if ( niter != 0) {
+    memcpy(avgDiffEntries, nextTimeEntries, nx*ny*sizeof(double));
+  } else {
+    memcpy(avgDiffEntries, ivEntries, nx*ny*sizeof(double));
+  }
+  for ( int ix = 0; ix < nx*ny; ++ix ) {
+    avgDiffEntries[ix] -= avg;
+    avgDiffEntries[ix] = ( avgDiffEntries[ix] < 0 ? avgDiffEntries[ix]*-1.: avgDiffEntries[ix] );
+  }
+
+  double avgDiff = computeAverage(avgDiffEntries, nx, ny);
+  printf("average: %e\n", avg);
+  printf("average absolute difference: %e\n", avgDiff);
+
+  free(avgDiffEntries);
+  free(nextTimeEntries);
+  free(ivEntries);
   
   return 0;
+}
+
+double computeNextTemp(const double* hij, const double* hijW, const double* hijE, const double* hijS, const double* hijN, const double* c)
+{
+  return (*hij) + (*c)*( ((*hijW) + (*hijE) + (*hijS) + (*hijN))/4 - (*hij));
+}
+
+double computeAverage(const double* tempArray, int nx, int ny)
+{
+  double sum=0.;
+  for ( int ix = 0; ix < nx*ny; ++ix ) {
+    sum += tempArray[ix];
+  }
+  return sum/(nx*ny);
 }
