@@ -1,6 +1,6 @@
 CC := gcc
-CFLAGS := -std=c11 -O3 -Wall -pthread -flto -march=native -ffast-math
-LIBS := -lpthread -lgomp -lm
+CFLAGS := -std=c11 -O3 -Wall -flto -march=native -ffast-math
+LIBS := -lm
 
 OBJS := heat_diffusion.o 
 
