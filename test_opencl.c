@@ -82,7 +82,7 @@ int main(){
     printf("cannot build program. log:\n");
     
     size_t log_size = 0;
-    clGetProgramBuildInfo( program, device_id[0], CL_PROGRAM_BUILD_LOG,
+    clGetProgramBuildInfo( program, device_id[1], CL_PROGRAM_BUILD_LOG,
                            0, NULL, &log_size); // get log_size.
 
     char * log = calloc(log_size, sizeof(char));
@@ -90,7 +90,7 @@ int main(){
       printf("could not allocate memory\n");
       return(1);
     }
-    clGetProgramBuildInfo( program, device_id[0], CL_PROGRAM_BUILD_LOG,
+    clGetProgramBuildInfo( program, device_id[1], CL_PROGRAM_BUILD_LOG,
                            log_size, log, NULL); // get log info.
     printf( "%s\n", log );
     
@@ -176,18 +176,30 @@ int main(){
   
   // Put kernel into queue -> execution:
   const size_t global = ix_m;
-  clEnqueueNDRangeKernel( command_queue, kernel,
-                          (cl_uint)1, // number
-                          NULL, (const size_t *)&global, NULL, 0, NULL, NULL );
-
-
+  error_code = clEnqueueNDRangeKernel( command_queue, kernel,
+                                       (cl_uint)1, // number of dimensions used to specify the global work-items
+                                       NULL, (const size_t *)&global,
+                                       NULL, 0, NULL, NULL );
+  if (error_code != CL_SUCCESS) {
+    printf("cannot enqueue execution of the kernel\n");
+    return(1);
+  }
 
   // Copy memory objects with results from device to host
   cl_float * c = (cl_float *) malloc(ix_m*sizeof(float));
-  clEnqueueReadBuffer( command_queue, output_buffer_c, CL_TRUE,
-                       0, ix_m*sizeof(float), (void *)c, 0, NULL, NULL );
+  error_code = clEnqueueReadBuffer( command_queue, output_buffer_c, CL_TRUE,
+                                    0, ix_m*sizeof(float), (void *)c,
+                                    0, NULL, NULL );
+  if (error_code != CL_SUCCESS) {
+    printf("cannot enqueue reading from buffer for c\n");
+    return(1);
+  }
 
-  clFinish(command_queue);
+  error_code = clFinish(command_queue);
+  if (error_code != CL_SUCCESS) {
+    printf("cannot block\n");
+    return(1);
+  }
   
   printf("Square of %d is %f\n", 100, c[100]);
 
