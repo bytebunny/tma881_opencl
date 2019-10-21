@@ -8,7 +8,7 @@ OBJS := heat_diffusion.o
 all: heat_diffusion 
 
 # Rule to generate object files:
-heat_diffusion: $(OBJS) 
+heat_diffusion: $(OBJS) compute_next_temp.cl reduce.cl compute_diff.cl
 	$(CC) -o $@ $(OBJS) $(CFLAGS) $(LIBS)
 
 test_opencl: test_opencl.o dot_prod_mul.cl
