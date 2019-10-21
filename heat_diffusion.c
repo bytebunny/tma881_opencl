@@ -112,6 +112,7 @@ int main(int argc, char* argv[])
   opencl_program_src[ program_size ] = '\0';
   fread( opencl_program_src, sizeof(char), program_size, fp);
   fclose( fp );
+  fp = NULL;
 
   cl_program program; // program object for a context.
   // NOTE: The devices associated with the program object are the devices associated with context.
@@ -148,7 +149,7 @@ int main(int argc, char* argv[])
     return(1);
   }
 
-  /* // Create kernel (contained in program): */
+  /* Create kernel (contained in program): */
   cl_kernel kernel;
   kernel = clCreateKernel( program, (const char *)"compute_next_temp",
                            &error_code );
@@ -193,7 +194,6 @@ int main(int argc, char* argv[])
   for ( int n = 0; n < niter; ++n) {
 
     // Set kernel arguments:
-
     error_code = clSetKernelArg( kernel, ind_old,
                                  sizeof(cl_mem),
                                  (const void *)&old_buffer );
@@ -212,7 +212,7 @@ int main(int argc, char* argv[])
     
     error_code = clSetKernelArg( kernel, (cl_uint)2,
                                  sizeof(double),
-                                 &c );
+                                 (const void *)&c );
     if (error_code != CL_SUCCESS) {
       printf("cannot set kernel argument for conductivity\n");
       return(1);
@@ -220,7 +220,7 @@ int main(int argc, char* argv[])
 
     error_code = clSetKernelArg( kernel, (cl_uint)3,
                                  sizeof(cl_uint),
-                                 &nx );
+                                 (const void *)&nx );
     if (error_code != CL_SUCCESS) {
       printf("cannot set kernel argument for width\n");
       return(1);
@@ -228,7 +228,7 @@ int main(int argc, char* argv[])
 
     error_code = clSetKernelArg( kernel, (cl_uint)4,
                                  sizeof(cl_uint),
-                                 &ny );
+                                 (const void *)&ny );
     if (error_code != CL_SUCCESS) {
       printf("cannot set kernel argument for height\n");
       return(1);
@@ -259,32 +259,155 @@ int main(int argc, char* argv[])
     ind_new = ind_dummy;
   }
 
-  // Copy memory objects with results from device to host  
-  if ( ind_old ) // Decide which array to copy back (must be the one whose index has value 0)
-    error_code = clEnqueueReadBuffer( command_queue, new_buffer, CL_TRUE,
-                                      0, total_size*sizeof(cl_double),
-                                      (void *)nextTimeEntries,
-                                      0, NULL, NULL );
-  else 
-    error_code = clEnqueueReadBuffer( command_queue, old_buffer, CL_TRUE,
-                                      0, total_size*sizeof(cl_double),
-                                      (void *)nextTimeEntries,
-                                      0, NULL, NULL );
+  /////////////////////////// Compute average temperature //////////////////////
+  const cl_int total_size_int = (cl_int)total_size;
+  const size_t global_size = 1024;
+  const size_t local_size = 32;
+  const size_t nmb_groups = global_size / local_size;
+
+  // Create buffer to store results of reduction:
+  cl_mem output_buffer_sum;
+  output_buffer_sum = clCreateBuffer( context, CL_MEM_WRITE_ONLY,
+                                      sizeof(cl_double) * nmb_groups,
+                                      NULL, &error_code);
   if (error_code != CL_SUCCESS) {
-    printf("cannot enqueue reading from buffer\n");
+    printf("cannot create buffer for sums\n");
+    return(1);
+  }
+
+  // Create program object for context (from C string):
+  FILE* fp_reduce;
+  fp_reduce = fopen( "reduce.cl", "r" );
+  fseek( fp_reduce, 0, SEEK_END );
+  program_size = ftell( fp_reduce );
+  rewind( fp_reduce );
+  
+  // read kernel source into buffer
+  char * opencl_program_src_reduce = (char*) malloc( program_size + 1 );
+  opencl_program_src_reduce[ program_size ] = '\0';
+  fread( opencl_program_src_reduce, sizeof(char), program_size, fp_reduce);
+  fclose( fp_reduce );
+  fp_reduce = NULL;
+
+  cl_program program_reduction; // program object for a context.
+  // NOTE: The devices associated with the program object are the devices associated with context.
+  program_reduction = clCreateProgramWithSource( context,
+                                                 (cl_uint)1, // number of char buffers.
+                                                 (const char **) &opencl_program_src_reduce, 
+                                                 NULL, &error_code );
+  if (error_code != CL_SUCCESS) {
+    printf("cannot create reduce program object\n");
+    return(1);
+  }
+
+  // Compile and link a program executable:  
+  error_code = clBuildProgram( program_reduction, 1, 
+                               (const cl_device_id *)&device_id[1],
+                               NULL, NULL, NULL);
+  if (error_code != CL_SUCCESS) {
+    printf("cannot build reduce program. log:\n");
+    
+    size_t log_size = 0;
+    clGetProgramBuildInfo( program_reduction, device_id[1], CL_PROGRAM_BUILD_LOG,
+                           0, NULL, &log_size); // get log_size.
+
+    char * log = calloc(log_size, sizeof(char));
+    if (log == NULL) {
+      printf("could not allocate memory\n");
+      return(1);
+    }
+    clGetProgramBuildInfo( program_reduction, device_id[1], CL_PROGRAM_BUILD_LOG,
+                           log_size, log, NULL); // get log info.
+    printf( "%s\n", log );
+    
+    free(log);
+    return(1);
+  }
+
+  cl_kernel kernel_reduction;
+  kernel_reduction = clCreateKernel( program_reduction, (const char *)"reduce",
+                                     &error_code );
+  if (error_code != CL_SUCCESS) {
+    printf("cannot create reduction kernel\n");
     return(1);
   }
 
 
+  if ( ind_old ) // Decide which array to copy back (must be the one whose index has value 0)
+    error_code = clSetKernelArg(kernel_reduction, (cl_uint)0, sizeof(cl_mem),
+                                (const void *)&new_buffer);
+  else
+    error_code = clSetKernelArg(kernel_reduction, (cl_uint)0, sizeof(cl_mem),
+                                (const void *)&old_buffer);
+  if (error_code != CL_SUCCESS) {
+    printf("cannot set kernel 1st argument for reduction\n");
+    return(1);
+  }
 
+  error_code = clSetKernelArg(kernel_reduction, (cl_uint)1,
+                              local_size*sizeof(cl_double), NULL);
+  if (error_code != CL_SUCCESS) {
+    printf("cannot set kernel 2nd argument for reduction\n");
+    return(1);
+  }
+  error_code = clSetKernelArg(kernel_reduction, (cl_uint)2,
+                              sizeof(cl_int), (const void *)&total_size_int);
+  if (error_code != CL_SUCCESS) {
+    printf("cannot set kernel 3rd argument for reduction\n");
+    return(1);
+  }
+  error_code = clSetKernelArg(kernel_reduction, (cl_uint)3,
+                              sizeof(cl_mem), (const void *)&output_buffer_sum);
+  if (error_code != CL_SUCCESS) {
+    printf("cannot set kernel 4th argument for reduction\n");
+    return(1);
+  }
+
+  error_code = clEnqueueNDRangeKernel( command_queue, kernel_reduction,
+                                       (cl_uint)1, // number of dimensions used to specify the global work-items
+                                       NULL, (const size_t *)&global_size,
+                                       (const size_t *)&local_size,
+                                       0, NULL, NULL );
+  if (error_code != CL_SUCCESS) {
+    printf("cannot enqueue execution of the reduction kernel\n");
+    return(1);
+  }
+
+  // The barrier is implicit. The explicit barrier is introduced for illustration:
+  error_code = clEnqueueBarrierWithWaitList(command_queue, 0, NULL, NULL);
+  if (error_code != CL_SUCCESS) {
+    printf("cannot enqueue a barrier\n");
+    return(1);
+  }
+
+  // Copy memory objects with results from device to host
+  cl_double * sums = (cl_double *)malloc( nmb_groups * sizeof(cl_double) );
+  error_code = clEnqueueReadBuffer( command_queue, output_buffer_sum, CL_TRUE,
+                                    0, nmb_groups * sizeof(cl_double), (void *)sums,
+                                    0, NULL, NULL );
+  if (error_code != CL_SUCCESS) {
+    printf("cannot enqueue reading from buffer for sums\n");
+    return(1);
+  }
+
+  error_code = clFinish(command_queue);
+  if (error_code != CL_SUCCESS) {
+    printf("cannot block\n");
+    return(1);
+  }
+
+  // Perform final reduction on CPU because communication between GPU cores is much slower.
+  double sum_total = 0;
+  for (size_t ix=0; ix < nmb_groups; ++ix)
+    sum_total += sums[ix];
 
   //compute average temperature
-  double avg = computeAverage(nextTimeEntries, nx, ny);
+  double avg = sum_total / total_size;
 
   double* avgDiffEntries = (double*) malloc(sizeof(double)*nx*ny);
-  for (int ix = 0; ix < nx*ny; ++ix) {
-    avgDiffEntries[ix] = 0.;
-  }
+  /* for (int ix = 0; ix < nx*ny; ++ix) { */
+  /*   avgDiffEntries[ix] = 0.; */
+  /* } */
 
   /* //compute differences (in nextTimeEntries since the contents are copied to ivEntries) */
   if ( niter != 0) {
@@ -303,23 +426,24 @@ int main(int argc, char* argv[])
 
   // Clean up:
   free(avgDiffEntries);
+  free(sums);
   free(nextTimeEntries);
   free(ivEntries);
   free(opencl_program_src);
+  free(opencl_program_src_reduce);
 
   clReleaseMemObject(new_buffer);
   clReleaseMemObject(old_buffer);
+  clReleaseMemObject(output_buffer_sum);
   clReleaseKernel(kernel);
+  clReleaseKernel(kernel_reduction);
   clReleaseProgram(program);
+  clReleaseProgram(program_reduction);
   clReleaseCommandQueue(command_queue);
   clReleaseContext(context);
   return 0;
 }
 
-double computeNextTemp(const double* hij, const double* hijW, const double* hijE, const double* hijS, const double* hijN, const double* c)
-{
-  return (*hij) + (*c)*( ((*hijW) + (*hijE) + (*hijS) + (*hijN))/4 - (*hij));
-}
 
 double computeAverage(const double* tempArray, int nx, int ny)
 {

@@ -16,5 +16,4 @@ __kernel void compute_next_temp(__global const double * old_temp,
 
   new_temp[ ix * width + jx ] = hij + conductivity * 
      ( 0.25 * ( hijW + hijE + hijS + hijN ) - hij );
-  //printf("%d, %d: %lf\n",ix,jx, new_temp[ix*width + jx]);
 }
