@@ -10,6 +10,16 @@
 #ifndef _H_HELPER // once-only header
 #define _H_HELPER
 
-double computeAverage(const double* tempArray, int nx, int ny);;
+void
+computeNextTemp(size_t ,
+                size_t ,
+                const double* ,
+                int ,
+                int ,
+                double ,
+                double* );
+double
+computeAverage(const double* , int , int );
+;
 
 #endif
