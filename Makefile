@@ -17,7 +17,7 @@ test_opencl: test_opencl.o dot_prod_mul.cl
 $(OBJS) : heat_diffusion.h
 
 test:
-	tar -czvf heat_diffusion.tar.gz heat_diffusion.c heat_diffusion.h Makefile
+	tar -czvf heat_diffusion.tar.gz heat_diffusion.c heat_diffusion.h compute_next_temp.cl compute_diff.cl reduce.cl Makefile
 	./check_submission.py heat_diffusion.tar.gz
 clean:
 	rm -rvf *.o heat_diffusion test_opencl extracted/ heat_diffusion.tar.gz vgcore*
