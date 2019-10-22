@@ -5,16 +5,13 @@ int
 main(int argc, char* argv[])
 {
   MPI_Init(NULL, NULL);
+  // double strtim, endtim, tiktork;
   // double strtim = MPI_Wtime();
   int nmb_mpi_proc, mpi_rank;
   MPI_Comm mpiworld = MPI_COMM_WORLD;
 
   MPI_Comm_size(mpiworld, &nmb_mpi_proc);
   MPI_Comm_rank(mpiworld, &mpi_rank);
-
-  if (mpi_rank == 0) {
-    // printf("use %d nodes\n", nmb_mpi_proc);
-  }
 
   int niter = 0;
   double c = 0.0;
@@ -35,173 +32,167 @@ main(int argc, char* argv[])
            "-n#numberOfTimeSteps4 -d#diffusionConstant\n");
     return 1;
   }
+  const double c1 = 1 - c;
+  const double c0 = c;
+  // strtim = MPI_Wtime();
 
-  int nx = 0, ny = 0;
+  int nx, ny;
   char line[80];
-  FILE* input = fopen("diffusion", "r");
-  int i = 0, j = 0;
-  double t = 0.;
-  if (input == NULL) {
-    perror("Error opening file");
-    return 2;
+  FILE* input;
+  if (mpi_rank == 0) {
+    input = fopen("diffusion", "r");
+    if (input == NULL) {
+      perror("Error opening file");
+      return 2;
+    }
+    fgets(line, sizeof(line), input);
+    sscanf(line, "%d %d", &ny, &nx);
   }
-
-  // read the first line
-  fgets(line, sizeof(line), input);
-  sscanf(line, "%d %d", &nx, &ny);
-  // store initial values (note: row major order)
-  double* ivEntries = (double*)calloc(sizeof(double), (nx + 2) * (ny + 2));
-  double* nextTimeEntries =
-    (double*)calloc(sizeof(double), (nx + 2) * (ny + 2));
-
-  while (fgets(line, sizeof(line), input) != NULL) {
-    sscanf(line, "%d %d %lf", &i, &j, &t);
-    ivEntries[(i + 1) * (ny + 2) + j + 1] = t;
-  }
-
-  fclose(input);
+  MPI_Bcast(&nx, 1, MPI_INT, 0, mpiworld);
+  MPI_Bcast(&ny, 1, MPI_INT, 0, mpiworld);
+  int nx2 = nx + 2;
+  int ny2 = ny + 2;
+  int nx2ny2 = (nx2) * (ny2);
 
   size_t const ix_sub_m = (nx - 1) / nmb_mpi_proc + 1;
-  // int *lens = (int *)malloc(nmb_mpi_proc * sizeof(int));
-  // int *poss = (int *)malloc(nmb_mpi_proc * sizeof(int));
   int lens[nmb_mpi_proc];
   int poss[nmb_mpi_proc];
+  // int *lens = (int *)malloc(nmb_mpi_proc * sizeof(int));
+  // int *poss = (int *)malloc(nmb_mpi_proc * sizeof(int));
+  if (mpi_rank == 0) {
+    for (size_t jx = 0, pos = 0; jx < nmb_mpi_proc; ++jx, pos += ix_sub_m) {
+      lens[jx] = ix_sub_m < nx - pos ? ix_sub_m : nx - pos;
+      poss[jx] = pos + 1;
+    }
+  }
+  MPI_Bcast(lens, nmb_mpi_proc, MPI_INT, 0, mpiworld);
+  MPI_Bcast(poss, nmb_mpi_proc, MPI_INT, 0, mpiworld);
+  int loclen = lens[mpi_rank];
+  int lastNodeRnk = nmb_mpi_proc - 1;
 
-  for (size_t jx = 0, pos = 0; jx < nmb_mpi_proc; ++jx, pos += ix_sub_m) {
-    lens[jx] = ix_sub_m < nx - pos ? ix_sub_m : nx - pos;
-    poss[jx] = pos + 1;
+  double* ivEntriesFull;
+  double* ivEntries;
+  double* nextTimeEntries;
+  if (mpi_rank == 0) {
+    ivEntriesFull = (double*)calloc(sizeof(double), nx2ny2);
+  }
+  ivEntries = (double*)calloc(sizeof(double), (loclen + 2) * ny2);
+  nextTimeEntries = (double*)calloc(sizeof(double), (loclen + 2) * ny2);
+
+  // read the first line
+  if (mpi_rank == 0) {
+    // store initial values (note: row major order)
+    int i, j;
+    double t;
+    while (fgets(line, sizeof(line), input) != NULL) {
+      sscanf(line, "%d %d %lf", &j, &i, &t);
+      ivEntriesFull[(i + 1) * (ny + 2) + j + 1] = t;
+    }
+    fclose(input);
+
+    memcpy(ivEntries, ivEntriesFull, sizeof(double) * (lens[0] + 2) * ny2);
+
+    if (nmb_mpi_proc > 1) {
+      for (size_t ix = 1; ix < nmb_mpi_proc; ix++) {
+        MPI_Send(ivEntriesFull + (poss[ix] - 1) * ny2,
+                 (lens[ix] + 2) * ny2,
+                 MPI_DOUBLE,
+                 ix,
+                 0,
+                 mpiworld);
+      }
+    }
+  }
+  if (mpi_rank > 0) {
+    MPI_Recv(ivEntries, (loclen + 2) * ny2, MPI_DOUBLE, 0, 0, mpiworld, NULL);
   }
 
+  // endtim = MPI_Wtime();
+  // tiktork = endtim - strtim;
+  // if (mpi_rank == 0) {
+  //   printf("send file to nodes time %f\n", tiktork);
+  // }
+
   double sum = 0.0;
-  // double tmpdata[nmb_mpi_proc * (ny + 2) * 2];
-  // double sendind[2 * (ny + 2)];
   // compute the temperatures in next time step
+  // double itrtim = 0.0, msgtim = 0.0;
   for (int n = 0; n < niter; ++n) {
-    for (int ix = 0; ix < lens[mpi_rank]; ++ix) {
-      int rind = poss[mpi_rank] + ix;
+    // strtim = MPI_Wtime();
+    for (int ix = 1; ix < loclen + 1; ++ix) {
       for (int jx = 1; jx < ny + 1; ++jx) {
-        double hij = ivEntries[rind * (ny + 2) + jx];
-        double hijW = ivEntries[rind * (ny + 2) + jx - 1];
-        double hijE = ivEntries[rind * (ny + 2) + jx + 1];
-        double hijS = ivEntries[(rind + 1) * (ny + 2) + jx];
-        double hijN = ivEntries[(rind - 1) * (ny + 2) + jx];
-        nextTimeEntries[rind * (ny + 2) + jx] =
-          hij + c * ((hijW + hijE + hijS + hijN) / 4 - hij);
+
+        double hij = ivEntries[ix * (ny2) + jx];
+        double hijW = ivEntries[ix * (ny2) + jx - 1];
+        double hijE = ivEntries[ix * (ny2) + jx + 1];
+        double hijS = ivEntries[(ix + 1) * (ny2) + jx];
+        double hijN = ivEntries[(ix - 1) * (ny2) + jx];
+
+        nextTimeEntries[ix * (ny2) + jx] =
+          hij * c1 + 0.25 * c0 * (hijW + hijE + hijS + hijN);
         if (n + 1 == niter) {
-          sum += nextTimeEntries[rind * (ny + 2) + jx];
+          sum += nextTimeEntries[ix * (ny2) + jx];
         }
       }
     }
+    // endtim = MPI_Wtime();
+    // itrtim += endtim - strtim;
+
     double* swp = nextTimeEntries;
     nextTimeEntries = ivEntries;
     ivEntries = swp;
-    //    memcpy(ivEntries + poss[mpi_rank] * (ny + 2),
-    //           nextTimeEntries + poss[mpi_rank] * (ny + 2),
-    //           lens[mpi_rank] * (ny + 2) * sizeof(double));
 
+    // strtim = MPI_Wtime();
     if (nmb_mpi_proc > 1) {
+      // messaging from rank 0 to rank n
+      if (mpi_rank == 0) {
+        // send the curren rank last line to the right rank
+        double* sendind = ivEntries + (loclen) * (ny2);
+        MPI_Send(sendind, ny2, MPI_DOUBLE, 1, 0, mpiworld);
+        // receive right rank top line to the curren rank btm - 1
+        double* recvind = ivEntries + (loclen + 1) * (ny2);
+        MPI_Recv(recvind, ny2, MPI_DOUBLE, 1, 0, mpiworld, NULL);
+      } else if (mpi_rank == lastNodeRnk) {
 
-      /*
-       * ─── BRADCAST
-       * ───────────────────────────────────────────────────────────────────
-       */
-      /*
-            if (mpi_rank > 0) {
-              memcpy(sendind,
-                     nextTimeEntries + (poss[mpi_rank]) * (ny + 2),
-                     sizeof(double) * (ny + 2));
-              memcpy(sendind + (ny + 2),
-                     nextTimeEntries +
-                       (poss[mpi_rank] + lens[mpi_rank] - 1) * (ny + 2),
-                     sizeof(double) * (ny + 2));
-              MPI_Send(sendind, (ny + 2) * 2, MPI_DOUBLE, 0, 0, mpiworld);
-            } else {
-              memcpy(tmpdata, nextTimeEntries + ny + 2, sizeof(double) * (ny +
-         2)); memcpy(tmpdata + ny + 2, nextTimeEntries + (ny + 2) * lens[0],
-                     sizeof(double) * (ny + 2));
+        // receive left rank last line to the curren rank top - 1
+        double* recvind = ivEntries;
+        MPI_Recv(recvind, ny2, MPI_DOUBLE, mpi_rank - 1, 0, mpiworld, NULL);
+        // send the curren rank top line to the left rank
+        double* sendind = ivEntries + (ny2);
+        MPI_Send(sendind, ny2, MPI_DOUBLE, mpi_rank - 1, 0, mpiworld);
+      } else {
 
-              for (size_t rk = 1; rk < nmb_mpi_proc; rk++) {
-                MPI_Recv(tmpdata + (rk) * (ny + 2) * 2,
-                         (ny + 2) * 2,
-                         MPI_DOUBLE,
-                         rk,
-                         0,
-                         mpiworld,
-                         NULL);
-              }
-            }
+        // receive left rank last line to the curren rank top - 1
+        double* recvindl2r = ivEntries;
+        MPI_Recv(recvindl2r, ny2, MPI_DOUBLE, mpi_rank - 1, 0, mpiworld, NULL);
+        // send the curren rank last line to the right rank
+        double* sendindl2r = ivEntries + loclen * (ny2);
+        MPI_Send(sendindl2r, ny2, MPI_DOUBLE, mpi_rank + 1, 0, mpiworld);
 
-            MPI_Bcast(tmpdata, nmb_mpi_proc * (ny + 2) * 2, MPI_DOUBLE, 0,
-         mpiworld);
-            // printf("rank %d\n", mpi_rank);
-            // for (size_t ii = 1; ii < nx + 1; ii++) {
-            //   for (size_t ij = 1; ij < ny + 1; ij++) {
-            //     printf("%f\t", ivEntries[ii * (ny + 2) + ij]);
-            //   }
-            //   printf("\b\n");
-            // }
-
-            if (mpi_rank > 0) {
-              memcpy(ivEntries + (poss[mpi_rank] - 1) * (ny + 2),
-                     tmpdata + (mpi_rank - 1) * (ny + 2) * 2 + ny + 2,
-                     sizeof(double) * (ny + 2));
-            }
-            if (mpi_rank + 1 < nmb_mpi_proc) {
-              memcpy(ivEntries + (poss[mpi_rank] + lens[mpi_rank]) * (ny + 2),
-                     tmpdata + (mpi_rank + 1) * (ny + 2) * 2,
-                     sizeof(double) * (ny + 2));
-            }
-      */
-
-      /*
-       * ─── RING
-       * ───────────────────────────────────────────────────────────────────────
-       */
-
-      if (nmb_mpi_proc > 1) {
-        // messaging from rank 0 to rank n
-        if (mpi_rank == 0) {
-
-          // send the curren rank last line to the right rank
-          double* sendind =
-            ivEntries + (poss[mpi_rank] + lens[mpi_rank] - 1) * (ny + 2);
-          MPI_Ssend(sendind, ny + 2, MPI_DOUBLE, 1, 0, mpiworld);
-          // receive right rank top line to the curren rank btm - 1
-          double* recvind =
-            ivEntries + (poss[mpi_rank] + lens[mpi_rank]) * (ny + 2);
-          MPI_Recv(recvind, ny + 2, MPI_DOUBLE, 1, 0, mpiworld, NULL);
-        } else if (mpi_rank == nmb_mpi_proc - 1) {
-
-          // receive left rank last line to the curren rank top - 1
-          double* recvind = ivEntries + (poss[mpi_rank] - 1) * (ny + 2);
-          MPI_Recv(
-            recvind, ny + 2, MPI_DOUBLE, mpi_rank - 1, 0, mpiworld, NULL);
-          // send the curren rank top line to the left rank
-          double* sendind = ivEntries + (poss[mpi_rank]) * (ny + 2);
-          MPI_Ssend(sendind, ny + 2, MPI_DOUBLE, mpi_rank - 1, 0, mpiworld);
-        } else {
-
-          // receive left rank last line to the curren rank top - 1
-          double* recvindl2r = ivEntries + (poss[mpi_rank] - 1) * (ny + 2);
-          MPI_Recv(
-            recvindl2r, ny + 2, MPI_DOUBLE, mpi_rank - 1, 0, mpiworld, NULL);
-          // send the curren rank last line to the right rank
-          double* sendindl2r =
-            ivEntries + (poss[mpi_rank] + lens[mpi_rank] - 1) * (ny + 2);
-          MPI_Ssend(sendindl2r, ny + 2, MPI_DOUBLE, mpi_rank + 1, 0, mpiworld);
-          /* • • • • • */
-          // receive right rank top line to the curren rank btm - 1
-          double* recvindr2l =
-            ivEntries + (poss[mpi_rank] + lens[mpi_rank]) * (ny + 2);
-          MPI_Recv(
-            recvindr2l, ny + 2, MPI_DOUBLE, mpi_rank + 1, 0, mpiworld, NULL);
-          // send the curren rank top line to the right rank
-          double* sendindr2l = ivEntries + (poss[mpi_rank]) * (ny + 2);
-          MPI_Ssend(sendindr2l, ny + 2, MPI_DOUBLE, mpi_rank - 1, 0, mpiworld);
-        }
+        // send the curren rank top line to the right rank
+        double* sendindr2l = ivEntries + (ny2);
+        MPI_Send(sendindr2l, ny2, MPI_DOUBLE, mpi_rank - 1, 0, mpiworld);
+        // receive right rank top line to the curren rank btm - 1
+        double* recvindr2l = ivEntries + (loclen + 1) * (ny2);
+        MPI_Recv(recvindr2l, ny2, MPI_DOUBLE, mpi_rank + 1, 0, mpiworld, NULL);
       }
     }
+    // endtim = MPI_Wtime();
+    // msgtim += endtim - strtim;
   } // end of iteration
+
+  // if (mpi_rank == 0) {
+  //   printf("iteration time %f\n", itrtim);
+  //   printf("msg passing time %f\n", msgtim);
+  // }
+  // printf("rank %d\n", mpi_rank);
+  // for (size_t ii = 1; ii < loclen + 1; ii++) {
+  //   for (size_t ij = 1; ij < ny + 1; ij++) {
+  //     printf("%f\t", ivEntries[ii * (ny + 2) + ij]);
+  //   }
+  //   printf("\b\n");
+  // }
+
+  // strtim = MPI_Wtime();
 
   double redSum = 0.0;
   MPI_Reduce(&sum, &redSum, 1, MPI_DOUBLE, MPI_SUM, 0, mpiworld);
@@ -215,13 +206,12 @@ main(int argc, char* argv[])
       abssum += absdelta;
     }
   }
- */
+  */
   MPI_Bcast(&avg, 1, MPI_DOUBLE, 0, mpiworld);
   double abssum = 0.0;
-  for (int ix = 0; ix < lens[mpi_rank]; ++ix) {
-    int rind = poss[mpi_rank] + ix;
+  for (int ix = 1; ix < loclen + 1; ++ix) {
     for (int jx = 1; jx < ny + 1; ++jx) {
-      double absdelta = ivEntries[rind * (ny + 2) + jx] - avg;
+      double absdelta = ivEntries[ix * (ny2) + jx] - avg;
       absdelta = (absdelta < 0.0 ? -absdelta : absdelta);
       abssum += absdelta;
     }
@@ -243,13 +233,21 @@ main(int argc, char* argv[])
   MPI_Reduce(&abssum, &redAbsSum, 1, MPI_DOUBLE, MPI_SUM, 0, mpiworld);
   double absavg = redAbsSum / (double)(nx * ny);
 
+  // endtim = MPI_Wtime();
+  // tiktork = endtim - strtim;
+  // if (mpi_rank == 0) {
+  //   printf("compute avg time %f\n", tiktork);
+  // }
+
+  if (mpi_rank == 0) {
+    free(ivEntriesFull);
+  }
   free(nextTimeEntries);
   free(ivEntries);
   // free(poss);
   // free(lens);
 
   if (mpi_rank == 0) {
-
     printf("average: %e\n", avg);
     printf("average absolute difference: %e\n", absavg);
 
