@@ -189,9 +189,21 @@ int main(int argc, char* argv[])
     return(1);
   }
 
-  const size_t global[] = {ny, nx};
+  const size_t global[] = {ny, nx}; // number of global work-items (max 1024x1024x1024).
   // Setting the pointer to local work size to NULL made program twice as slow.
-  const size_t local[] = {10,10}; // CL_DEVICE_MAX_WORK_GROUP_SIZE is 32. The value has to be a divisor of global (ny and nx).
+  // Max number of work-items in a work-group is 1024. The value has to be a divisor of global (ny and nx):
+  size_t local_x, local_y;
+  if ( nx > 100 ) {
+    local_x = 100;
+    local_y = (ny < 10 ? ny : 10);
+  }
+  else{
+    local_x = (nx < 10 ? nx : 10);
+    if ( ny > 100 ) local_y = 100;
+    else local_y = (ny < 10 ? ny : 10);
+  }
+  const size_t local[] = {local_y,local_x}; 
+
   //compute the temperatures in next time step
   cl_uint ind_old = (cl_uint)0, ind_new = (cl_uint)1, ind_dummy;
   for ( int n = 0; n < niter; ++n) {
@@ -495,7 +507,7 @@ int main(int argc, char* argv[])
   error_code = clEnqueueNDRangeKernel( command_queue, kernel_diff,
                                        (cl_uint)2, // number of dimensions used to specify the global work-items
                                        NULL, (const size_t *)&global,
-                                       NULL, 0, NULL, NULL );
+                                       (const size_t *)&local, 0, NULL, NULL );
   if (error_code != CL_SUCCESS) {
     printf("cannot enqueue execution of the difference kernel\n");
     return(1);
